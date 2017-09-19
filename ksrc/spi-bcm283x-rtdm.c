@@ -1,5 +1,6 @@
 /**
  * Copyright (C) 2016 Nicolas Schurando <schurann@ext.essilor.com>
+ * Copyright (C) 2017 Piotr Piórkowski <qba100@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,58 +20,42 @@
 /* Self header */
 #include "../include/spi-bcm283x-rtdm.h"
 
-/* Linux headers */
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/printk.h>
-#include <linux/init.h>
-#include <linux/errno.h>
-
-/* RTDM headers */
-#include <rtdm/rtdm.h>
-#include <rtdm/driver.h>
-
-/* BCM2835 library header */
-#include "bcm2835.h"
-
-/* Bypass eclipse syntax checker */
+/* Bypass CLion syntax checker */
 #ifdef __CDT_PARSER__
-	#define __init
+    #define __init
 	#define __exit
+    #define MODULE_VERSION(x)
+    #define MODULE_DESCRIPTION(x)
+    #define MODULE_AUTHOR(x)
+    #define MODULE_LICENSE(x)
+    #define module_init(x)
+    #define module_exit(x)
 #endif /* __CDT_PARSER__ */
-
-/**
- * Buffer type.
- */
-typedef struct buffer_s {
-	int size;
-	char data[BCM283X_SPI_BUFFER_SIZE_MAX];
-} buffer_t;
-
-/**
- * Device config structure stored inside each context.
- */
-typedef struct config_s {
-	int bit_order;
-	int data_mode;
-	int clock_divider;
-	int chip_select;
-	int chip_select_polarity;
-} config_t;
-
-/**
- * Device context, associated with every open device instance.
- */
-typedef struct spi_bcm283x_context_s {
-	config_t config;
-	buffer_t transmit_buffer;
-	buffer_t receive_buffer;
-} spi_bcm283x_context_t;
-
 /**
  * This structure enumerates the two RTDM devices created for SPI0.
  */
 static struct rtdm_device spi_bcm283x_devices[2];
+
+
+/**
+ * Open handler. Note: opening a named device instance always happens from secondary mode.
+ * @param[in] context The context associated with the device.
+ * @return 0 on success. On failure, a negative error code is returned.
+ */
+static int bcm283x_spi_rtdm_set_default_config(spi_bcm283x_context_t *context, int chip_select){
+
+    /* Retrieve context */
+    if(context == NULL )
+        return -1;
+
+    /* Set default config */
+    context->config.bit_order = BCM2835_SPI_BIT_ORDER_MSBFIRST;
+    context->config.data_mode = BCM2835_SPI_MODE0;
+    context->config.clock_divider = BCM2835_SPI_CLOCK_DIVIDER_65536;
+    context->config.chip_select_polarity = LOW;
+    context->config.chip_select = chip_select;
+    return 0;
+}
 
 /**
  * Open handler. Note: opening a named device instance always happens from secondary mode.
@@ -79,22 +64,15 @@ static struct rtdm_device spi_bcm283x_devices[2];
  * @return 0 on success. On failure, a negative error code is returned.
  */
 static int bcm283x_spi_rtdm_open(struct rtdm_fd *fd, int oflags) {
+	if(fd == NULL)
+		return -1;
+	spi_bcm283x_context_t * context = (spi_bcm283x_context_t *) rtdm_fd_to_private(fd);
 
-	spi_bcm283x_context_t *context;
 
-	/* Retrieve context */
-	context = (spi_bcm283x_context_t *) rtdm_fd_to_private(fd);
-
-	/* Set default config */
-	context->config.bit_order = BCM2835_SPI_BIT_ORDER_MSBFIRST;
-	context->config.data_mode = BCM2835_SPI_MODE0;
-	context->config.clock_divider = BCM2835_SPI_CLOCK_DIVIDER_65536;
-	context->config.chip_select = rtdm_fd_minor(fd);
-	context->config.chip_select_polarity = LOW;
-
-	return 0;
-
+	return bcm283x_spi_rtdm_set_default_config(context, rtdm_fd_minor(fd));
 }
+
+
 
 /**
  * Close handler. Note: closing a device instance always happens from secondary mode.
@@ -104,6 +82,34 @@ static int bcm283x_spi_rtdm_open(struct rtdm_fd *fd, int oflags) {
 static void bcm283x_spi_rtdm_close(struct rtdm_fd *fd) {
 
 	return;
+
+}
+
+
+/**
+ * Read from the device.
+ * @param[in] context The context associated with the device.
+ * @param[out] buf Input buffer as passed by the user.
+ * @param[in] size Number of bytes the user requests to read.
+ * @return On success, the number of bytes read. On failure return either -ENOSYS, to request that this handler be called again from the opposite realtime/non-realtime context, or another negative error code.
+ */
+static ssize_t bcm283x_spi_rtdm_read_rt_using_context(spi_bcm283x_context_t *context, buffer_t *buf, size_t size) {
+
+    size_t read_size;
+
+    /* Limit size */
+    read_size = (size > BCM283X_SPI_BUFFER_SIZE_MAX) ? BCM283X_SPI_BUFFER_SIZE_MAX : size;
+    read_size = (read_size > context->receive_buffer.size) ? context->receive_buffer.size : read_size;
+
+    buf->size = context->receive_buffer.size;
+    strncpy(buf->data, context->receive_buffer.data, BCM283X_SPI_BUFFER_SIZE_MAX);
+
+
+    /* Reset buffer size */
+    context->receive_buffer.size = 0;
+
+    /* Return read bytes */
+    return read_size;
 
 }
 
@@ -117,15 +123,16 @@ static void bcm283x_spi_rtdm_close(struct rtdm_fd *fd) {
 static ssize_t bcm283x_spi_rtdm_read_rt(struct rtdm_fd *fd, void __user *buf, size_t size) {
 
 	spi_bcm283x_context_t *context;
-	size_t read_size;
-	int res;
-
-	/* Retrieve context */
-	context = (spi_bcm283x_context_t *) rtdm_fd_to_private(fd);
+	ssize_t read_size;
+    int res;
+    /* Retrieve context */
+    context = (spi_bcm283x_context_t *) rtdm_fd_to_private(fd);
 
 	/* Limit size */
 	read_size = (size > BCM283X_SPI_BUFFER_SIZE_MAX) ? BCM283X_SPI_BUFFER_SIZE_MAX : size;
 	read_size = (read_size > context->receive_buffer.size) ? context->receive_buffer.size : read_size;
+
+
 
 	/* Copy data to user space */
 	res = rtdm_safe_copy_to_user(fd, buf, (const void *) context->receive_buffer.data, read_size);
@@ -134,11 +141,51 @@ static ssize_t bcm283x_spi_rtdm_read_rt(struct rtdm_fd *fd, void __user *buf, si
 		return (res < 0) ? res : -res;
 	}
 
-	/* Reset buffer size */
-	context->receive_buffer.size = 0;
+    return read_size;
+}
 
-	/* Return read bytes */
-	return read_size;
+/**
+ * Write to the device.
+ * @warning If unread data was present in the receive buffer, it will be overwritten.
+ * @param[in] context The context associated with the device.
+ * @param[in] buf Output buffer as passed by the user.
+ * @param[in] size Number of bytes the user requests to write.
+ * @return On success, the number of bytes written. On failure return either -ENOSYS, to request that this handler be called again from the opposite realtime/non-realtime context, or another negative error code.
+ */
+static ssize_t bcm283x_spi_rtdm_write_rt_using_context(spi_bcm283x_context_t *context, buffer_t *buf, size_t size) {
+
+    size_t write_size;
+
+    /* Ensure that there will be enough space in the buffer */
+    if (size > BCM283X_SPI_BUFFER_SIZE_MAX) {
+        printk(KERN_ERR "%s: Trying to transmit data larger than buffer size !", __FUNCTION__);
+        return -EINVAL;
+    }
+    write_size = size;
+
+    /* Retrieve context */
+
+    strncpy(context->transmit_buffer.data, buf, BCM283X_SPI_BUFFER_SIZE_MAX);
+    context->transmit_buffer.size = write_size;
+
+    /* Warn if receive buffer was not empty */
+    if (context->receive_buffer.size > 0) {
+        printk(KERN_WARNING "%s: Receive buffer was not empty and will be overwritten.\r\n", __FUNCTION__);
+    }
+
+    /* Restore device spi settings */
+    bcm2835_spi_setBitOrder(context->config.bit_order);
+    bcm2835_spi_setDataMode(context->config.data_mode);
+    bcm2835_spi_setClockDivider(context->config.clock_divider);
+    bcm2835_spi_setChipSelectPolarity(context->config.chip_select, context->config.chip_select_polarity);
+
+    /* Initiate an outgoing transfer which will also store read content in input buffer. */
+    bcm2835_spi_chipSelect(context->config.chip_select);
+    bcm2835_spi_transfernb(context->transmit_buffer.data, context->receive_buffer.data, write_size);
+    context->receive_buffer.size = write_size;
+
+    /* Return bytes written */
+    return write_size;
 
 }
 
@@ -153,47 +200,26 @@ static ssize_t bcm283x_spi_rtdm_read_rt(struct rtdm_fd *fd, void __user *buf, si
 static ssize_t bcm283x_spi_rtdm_write_rt(struct rtdm_fd *fd, const void __user *buf, size_t size) {
 
 	spi_bcm283x_context_t *context;
-	size_t write_size;
+	buffer_t *temp_buffer;
+	ssize_t  write_size;
 	int res;
-
-	/* Ensure that there will be enough space in the buffer */
-	if (size > BCM283X_SPI_BUFFER_SIZE_MAX) {
-		printk(KERN_ERR "%s: Trying to transmit data larger than buffer size !", __FUNCTION__);
-		return -EINVAL;
-	}
-	write_size = size;
 
 	/* Retrieve context */
 	context = (spi_bcm283x_context_t *) rtdm_fd_to_private(fd);
 
 	/* Save data in kernel space buffer */
-	res = rtdm_safe_copy_from_user(fd, context->transmit_buffer.data, buf, write_size);
+	temp_buffer = (buffer_t *)vmalloc(sizeof(buffer_t));
+	res = rtdm_safe_copy_from_user(fd, temp_buffer->data, buf, size);
 	if (res) {
 		printk(KERN_ERR "%s: Can't copy data from user space to driver (%d)!\r\n", __FUNCTION__, res);
 		return (res < 0) ? res : -res;
 	}
-	context->transmit_buffer.size = write_size;
-
-	/* Warn if receive buffer was not empty */
-	if (context->receive_buffer.size > 0) {
-		printk(KERN_WARNING "%s: Receive buffer was not empty and will be overwritten.\r\n", __FUNCTION__);
-	}
-
-	/* Restore device spi settings */
-	bcm2835_spi_setBitOrder(context->config.bit_order);
-	bcm2835_spi_setDataMode(context->config.data_mode);
-	bcm2835_spi_setClockDivider(context->config.clock_divider);
-	bcm2835_spi_setChipSelectPolarity(context->config.chip_select, context->config.chip_select_polarity);
-
-	/* Initiate an outgoing transfer which will also store read content in input buffer. */
-	bcm2835_spi_chipSelect(context->config.chip_select);
-	bcm2835_spi_transfernb(context->transmit_buffer.data, context->receive_buffer.data, write_size);
-	context->receive_buffer.size = write_size;
-
-	/* Return bytes written */
+	write_size =  bcm283x_spi_rtdm_write_rt_using_context(context, temp_buffer, size);
+	vfree(temp_buffer);
 	return write_size;
 
 }
+
 
 /**
  * Changes the bit order setting for one device.
@@ -366,17 +392,17 @@ static int bcm283x_spi_rtdm_ioctl_rt(struct rtdm_fd *fd, unsigned int request, v
  * This structure describes the RTDM driver.
  */
 static struct rtdm_driver spi_bcm283x_driver = {
-	.profile_info = RTDM_PROFILE_INFO(foo, RTDM_CLASS_EXPERIMENTAL, RTDM_SUBCLASS_GENERIC, 42),
-	.device_flags = RTDM_NAMED_DEVICE | RTDM_EXCLUSIVE | RTDM_FIXED_MINOR,
-	.device_count = 2,
-	.context_size = sizeof(struct spi_bcm283x_context_s),
-	.ops = {
-		.open = bcm283x_spi_rtdm_open,
-		.read_rt = bcm283x_spi_rtdm_read_rt,
-		.write_rt = bcm283x_spi_rtdm_write_rt,
-		.ioctl_rt = bcm283x_spi_rtdm_ioctl_rt,
-		.close = bcm283x_spi_rtdm_close
-	}
+		.profile_info = RTDM_PROFILE_INFO(foo, RTDM_CLASS_EXPERIMENTAL, RTDM_SUBCLASS_GENERIC, 42),
+		.device_flags = RTDM_NAMED_DEVICE | RTDM_EXCLUSIVE | RTDM_FIXED_MINOR,
+		.device_count = 2,
+		.context_size = sizeof(struct spi_bcm283x_context_s),
+		.ops = {
+				.open = bcm283x_spi_rtdm_open,
+				.read_rt = bcm283x_spi_rtdm_read_rt,
+				.write_rt = bcm283x_spi_rtdm_write_rt,
+				.ioctl_rt = bcm283x_spi_rtdm_ioctl_rt,
+				.close = bcm283x_spi_rtdm_close
+		}
 };
 
 /**
@@ -498,4 +524,12 @@ module_exit(bcm283x_spi_rtdm_exit);
 MODULE_VERSION(GIT_VERSION);
 MODULE_DESCRIPTION("Real-Time SPI driver for the Broadcom BCM283x SoC familly using the RTDM API");
 MODULE_AUTHOR("Nicolas Schurando <schurann@ext.essilor.com>");
+MODULE_AUTHOR("Piotr Piórkowski <qba100@gmail.com>");
 MODULE_LICENSE("GPL v2");
+EXPORT_SYMBOL(bcm283x_spi_rtdm_set_default_config);
+EXPORT_SYMBOL(bcm283x_spi_rtdm_write_rt_using_context);
+EXPORT_SYMBOL(bcm283x_spi_rtdm_read_rt_using_context);
+EXPORT_SYMBOL(bcm283x_spi_change_bit_order);
+EXPORT_SYMBOL(bcm283x_spi_change_data_mode);
+EXPORT_SYMBOL(bcm283x_spi_change_clock_divider);
+EXPORT_SYMBOL(bcm283x_spi_change_cs_polarity);

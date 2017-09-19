@@ -1,5 +1,6 @@
 /**
  * Copyright (C) 2016 Nicolas Schurando <schurann@ext.essilor.com>
+ * Copyright (C) 2017 Piotr Piórkowski <qba100@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,10 +20,57 @@
 #ifndef BCM283X_SPI_RTDM_H
 #define BCM283X_SPI_RTDM_H
 
+/* Linux headers */
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/printk.h>
+#include <linux/init.h>
+#include <linux/errno.h>
+#include <linux/string.h>
+#include <linux/vmalloc.h>
+
+/* RTDM headers */
+#include <rtdm/rtdm.h>
+#include <rtdm/driver.h>
+
+/* BCM2835 library header */
+#include "../ksrc/bcm2835.h"
+
+
 /**
  * Maximum size for transmit and receive buffers.
  */
 #define BCM283X_SPI_BUFFER_SIZE_MAX 1024
+
+/**
+ * Buffer type.
+ */
+ typedef struct buffer_s {
+	int size;
+	char data[BCM283X_SPI_BUFFER_SIZE_MAX];
+} buffer_t;
+
+/**
+ * Device config structure stored inside each context.
+ */
+typedef struct config_s {
+	int bit_order;
+	int data_mode;
+	int clock_divider;
+	int chip_select;
+	int chip_select_polarity;
+} config_t;
+
+/**
+ * Device context, associated with every open device instance.
+ */
+typedef struct spi_bcm283x_context_s {
+	config_t config;
+	buffer_t transmit_buffer;
+	buffer_t receive_buffer;
+} spi_bcm283x_context_t;
+
+
 
 /**
  * IOCTL request for changing the SPI bit order.

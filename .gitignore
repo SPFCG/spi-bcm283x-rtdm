@@ -8,6 +8,11 @@ build/*
 !build/Makefile
 ksrc/*.o
 ksrc/*.o.cmd
+.idea
+.vscode
 
 # Ignore release files
 release/*
+/cmake-build-debug/
+
+/CMakeLists.txt
