@@ -36,6 +36,19 @@
 /* BCM2835 library header */
 #include "../ksrc/bcm2835.h"
 
+#define  DRDY  RPI_GPIO_P1_11         //P0
+#define  RST  RPI_GPIO_P1_12     //P1
+#define	SPICS	RPI_GPIO_P1_15	//P3
+
+#define CS_1() bcm2835_gpio_write(SPICS,HIGH)
+#define CS_0()  bcm2835_gpio_write(SPICS,LOW)
+
+#define SPI_BCM283X_RTDM_DEVICES_NUMBER 2
+
+#define DRDY_IS_LOW()	((bcm2835_gpio_lev(DRDY)==0))
+
+#define RST_1() 	bcm2835_gpio_write(RST,HIGH);
+#define RST_0() 	bcm2835_gpio_write(RST,LOW);
 
 /**
  * Maximum size for transmit and receive buffers.
@@ -47,7 +60,7 @@
  */
  typedef struct buffer_s {
 	int size;
-	char data[BCM283X_SPI_BUFFER_SIZE_MAX];
+	uint8_t data[BCM283X_SPI_BUFFER_SIZE_MAX];
 } buffer_t;
 
 /**
@@ -68,6 +81,7 @@ typedef struct spi_bcm283x_context_s {
 	config_t config;
 	buffer_t transmit_buffer;
 	buffer_t receive_buffer;
+    uint8_t  device_used;
 } spi_bcm283x_context_t;
 
 

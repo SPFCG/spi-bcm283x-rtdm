@@ -1434,7 +1434,7 @@ extern "C" {
       \param[in] len Number of bytes in the tbuf buffer, and the number of bytes to send/received
       \sa bcm2835_spi_transfer()
     */
-    extern void bcm2835_spi_transfernb(char* tbuf, char* rbuf, uint32_t len);
+    extern void bcm2835_spi_transfernb(uint8_t* tbuf, uint8_t* rbuf, uint32_t len, uint32_t * tx_size);
 
     /*! Transfers any number of bytes to and from the currently selected SPI slave
       using bcm2835_spi_transfernb.
@@ -1443,7 +1443,7 @@ extern "C" {
       \param[in] len Number of bytes int eh buffer, and the number of bytes to send/received
       \sa bcm2835_spi_transfer()
     */
-    extern void bcm2835_spi_transfern(char* buf, uint32_t len);
+    extern void bcm2835_spi_transfern(uint8_t* buf, uint32_t len);
 
     /*! Transfers any number of bytes to the currently selected SPI slave.
       Asserts the currently selected CS pins (as previously set by bcm2835_spi_chipSelect)
